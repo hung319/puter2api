@@ -1,14 +1,18 @@
 // main.ts
-//
-// Cách chạy:
-// 1. Tạo file .env
-// 2. Chạy:
-//    deno run --allow-net --allow-env --allow-read main.ts
-//    (Vẫn cần --allow-read để đọc file .env)
+
+// ===============================================
+// 🚀 GIẢI PHÁP: "Pre-load" dependency bị thiếu
+// Import này chỉ để Deno tải và cache gói 'putility'.
+// 'puter.js' sẽ sử dụng nó.
+import 'npm:@heyputer/putility@latest'; 
+// ===============================================
 
 import { Hono } from 'npm:hono@latest';
 import { streamSSE } from 'npm:hono/streaming';
+
+// ✅ Import chính thức (sẽ hoạt động sau khi có import ở trên)
 import { puter } from 'npm:@heyputer/puter.js';
+
 import { load } from 'https://deno.land/std@0.224.0/dotenv/mod.ts';
 
 // 1. TẢI .ENV (Không đổi)
@@ -23,17 +27,16 @@ if (!PUTER_AUTH_TOKEN || !SERVER_API_KEY) {
   Deno.exit(1);
 }
 
+// 3. KHỞI TẠO PUTER SDK (Không đổi)
+// 'puter' (được import ở trên) đã được tự động khởi tạo 
+// và sẽ sử dụng PUTER_AUTH_TOKEN từ Deno.env.get()
+console.log("✅ Đã khởi tạo Puter client (tự động).");
 
-// ===============================================
-// 4. (CẬP NHẬT) TẢI MODELS VÀO BỘ NHỚ KHI KHỞI ĐỘNG
-// ===============================================
+
+// 4. (CẬP NHẬT) TẢI MODELS VÀO BỘ NHỚ KHI KHỞI ĐỘNG (Không đổi)
 let modelsData: any[] = [];
 const MODELS_URL = "https://puter.com/puterai/chat/models";
 
-/**
- * Hàm này tự động chạy khi server khởi động,
- * tải models từ URL và lưu vào biến 'modelsData'.
- */
 async function loadModelsIntoMemory() {
   console.log(`Đang tải models từ: ${MODELS_URL}...`);
   try {
@@ -41,29 +44,21 @@ async function loadModelsIntoMemory() {
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`);
     }
-    
-    // File models.txt chứa {"models": ["...", "..."]}
     const modelsJson = await response.json();
     const modelsList = modelsJson.models; 
-
-    // Chuyển đổi list string thành định dạng object của OpenAI
     modelsData = modelsList.map((modelId: string) => ({
       id: modelId,
       object: "model",
-      created: Math.floor(Date.now() / 1000), // Dùng timestamp hiện tại
-      owned_by: "puter", // Giả định
+      created: Math.floor(Date.now() / 1000),
+      owned_by: "puter",
     }));
-    
     console.log(`✅ Đã tải ${modelsData.length} models vào bộ nhớ.`);
-    
   } catch (err) {
     console.error("⚠️ Lỗi nghiêm trọng: Không thể tải danh sách models.", err.message);
-    console.error("Endpoint /v1/models sẽ trả về danh sách rỗng.");
-    // Bạn có thể chọn Deno.exit(1) ở đây nếu muốn server dừng
   }
 }
 
-// 5. TẠO HONO SERVER
+// 5. TẠO HONO SERVER (Không đổi)
 const app = new Hono();
 
 // 6. MIDDLEWARE XÁC THỰC (Không đổi)
@@ -79,18 +74,17 @@ app.use('/v1/*', async (c, next) => {
   await next();
 });
 
-// 7. ENDPOINT /v1/models (Không đổi, chỉ đọc từ 'modelsData')
+// 7. ENDPOINT /v1/models (Không đổi)
 app.get('/v1/models', (c) => {
   console.log("GET /v1/models (Đã xác thực)");
   return c.json({
     object: "list",
-    data: modelsData, // 'modelsData' giờ được điền từ network
+    data: modelsData,
   });
 });
 
 // 8. ENDPOINT /v1/chat/completions (Không đổi)
 app.post('/v1/chat/completions', async (c) => {
-  // (Toàn bộ logic xử lý chat giữ nguyên y hệt)
   console.log("POST /v1/chat/completions (Đã xác thực)");
   const body = await c.req.json();
   const isStream = body.stream ?? false;
@@ -177,16 +171,15 @@ app.post('/v1/chat/completions', async (c) => {
 
 // 9. HEALTH CHECK (Không đổi)
 app.get('/', (c) => {
-  return c.text('Puter.js (Deno) OpenAI-compatible Proxy (v4 - In-Memory) is running!');
+  return c.text('Puter.js (Deno) OpenAI-compatible Proxy (v5 - Dep Fix) is running!');
 });
 
 // 10. KHỞI ĐỘNG SERVER
 console.log("✅ Đã tải cấu hình từ .env");
 
-// Chạy hàm tải models TRƯỚC khi khởi động server
 await loadModelsIntoMemory(); 
 
-console.log("✅ Server Deno (Proxy Puter.js v4) đang chạy tại: http://localhost:8000");
+console.log("✅ Server Deno (Proxy Puter.js v5) đang chạy tại: http://localhost:8000");
 console.log("🔒 Các endpoint /v1/* đã được bảo vệ bằng SERVER_API_KEY.");
 
 Deno.serve({
