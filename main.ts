@@ -23,8 +23,6 @@ if (!PUTER_AUTH_TOKEN || !SERVER_API_KEY) {
   Deno.exit(1);
 }
 
-// 3. KHỞI TẠO PUTER SDK (Không đổi)
-const puter = init(PUTER_AUTH_TOKEN);
 
 // ===============================================
 // 4. (CẬP NHẬT) TẢI MODELS VÀO BỘ NHỚ KHI KHỞI ĐỘNG
