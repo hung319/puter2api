@@ -1,31 +1,17 @@
 // src/index.ts
 
 // 1. LẤY CẤU HÌNH TỪ .ENV
-// -------------------------------------------------------------------
-// LƯU Ý QUAN TRỌNG VỀ BIẾN MÔI TRƯỜNG:
-//
-// JWT_TOKEN: Token *thực sự* của Puter (cái 'eyJhbGci...')
-//            Dùng để gọi API của Puter.
-//            Bạn có thể thêm nhiều token, cách nhau bằng dấu phẩy.
-//
-// AUTH_TOKEN: Token *của bạn* (API Key công khai)
-//             Dùng để xác thực các client gọi vào API này.
-//             Ví dụ: 11042006
-// -------------------------------------------------------------------
-
 const jwtTokens = (process.env.JWT_TOKEN || "").split(",").filter(Boolean);
 const authTokens = (process.env.AUTH_TOKEN || "11042006").split(",").filter(Boolean);
 
 if (jwtTokens.length === 0) {
   console.error("Lỗi: Biến môi trường 'JWT_TOKEN' chưa được set.");
-  console.error("Đây là token (bắt đầu bằng 'eyJ...') để xác thực với Puter.");
 }
 if (authTokens.length === 0) {
   console.error("Lỗi: Biến môi trường 'AUTH_TOKEN' chưa được set.");
-  console.error("Đây là API key (ví dụ: '11042006') để bảo vệ API của bạn.");
 }
 
-// 2. PHÂN LOẠI MODELS (Logic từ file của bạn)
+// 2. PHÂN LOẠI MODELS TĨNH (DÙNG LÀM DỰ PHÒNG - FALLBACK)
 class ModelCategories {
   static deepseek = [
     "deepseek-chat", "deepseek-reasoner", "deepseek-v3", "deepseek-r1-0528"
@@ -45,7 +31,7 @@ class ModelCategories {
     "mistral-large-latest", "codestral-latest"
   ];
 
-  static getAllModels() {
+  static getAllModelsStatic() {
     return [
       ...ModelCategories.deepseek.map(id => ({ id, owned_by: "deepseek" })),
       ...ModelCategories.xai.map(id => ({ id, owned_by: "xai" })),
@@ -56,7 +42,68 @@ class ModelCategories {
   }
 }
 
-// 3. MIDDLEWARE XÁC THỰC
+// 3. LOGIC TẢI MODELS (ĐỘNG CÓ DỰ PHÒNG TĨNH)
+// -------------------------------------------------------------------
+
+// Biến toàn cục để chứa danh sách models
+let modelsData: any[] = [];
+const MODELS_URL = "https://puter.com/puterai/chat/models"; // URL động
+
+async function loadModelsRobust() {
+  // BƯỚC 1: Thử tải động
+  try {
+    console.log(`Đang thử tải models động từ: ${MODELS_URL}...`);
+    const response = await fetch(MODELS_URL);
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    
+    // Cấu trúc file models.txt của bạn: {"models": ["...", "..."]}
+    const modelsJson = await response.json(); 
+    const modelsList = modelsJson.models;
+
+    if (!modelsList || !Array.isArray(modelsList) || modelsList.length === 0) {
+      throw new Error("Tải động thành công nhưng nội dung rỗng.");
+    }
+
+    // Chuyển đổi danh sách động
+    // Chúng ta phải suy luận 'owned_by' vì API này không cung cấp
+    modelsData = modelsList.map((modelId: string) => {
+      let owned_by = "unknown";
+      if (modelId.includes("deepseek")) owned_by = "deepseek";
+      else if (modelId.includes("grok")) owned_by = "xai";
+      else if (modelId.includes("gpt-") || modelId.startsWith("o1")) owned_by = "openai";
+      else if (modelId.includes("claude")) owned_by = "anthropic";
+      else if (modelId.includes("mistral")) owned_by = "mistral";
+      
+      return {
+        id: modelId,
+        object: "model",
+        created: Math.floor(Date.now() / 1000), // Dùng timestamp động
+        owned_by: owned_by
+      };
+    });
+    
+    console.log(`✅ Đã tải động ${modelsData.length} models vào bộ nhớ.`);
+
+  } catch (err) {
+    // BƯỚC 2: Thất bại, dùng danh sách TĨNH
+    console.warn("⚠️ Tải models động thất bại.", (err as Error).message);
+    console.warn("Đang sử dụng danh sách models tĩnh (hard-coded) làm dự phòng.");
+    
+    const staticModels = ModelCategories.getAllModelsStatic(); 
+    modelsData = staticModels.map(model => ({
+      id: model.id,
+      object: "model",
+      created: 1752371050, // Dùng timestamp tĩnh
+      owned_by: model.owned_by
+    }));
+    
+    console.log(`✅ Đã tải ${modelsData.length} models tĩnh (dự phòng).`);
+  }
+}
+
+// 4. MIDDLEWARE XÁC THỰC (Không đổi)
 function authMiddleware(req: Request) {
   const authHeader = req.headers.get("Authorization");
   if (!authHeader) {
@@ -64,7 +111,6 @@ function authMiddleware(req: Request) {
       status: 401, headers: { "Content-Type": "application/json" }
     });
   }
-
   const token = authHeader.replace("Bearer ", "");
   if (!authTokens.includes(token)) {
     return new Response(JSON.stringify({ error: "Invalid authorization token" }), {
@@ -74,38 +120,31 @@ function authMiddleware(req: Request) {
   return null;
 }
 
-// 4. HANDLER CHO /v1/models
+// 5. HANDLER CHO /v1/models (SỬA LẠI)
 function handleModelsRequest() {
-  const models = ModelCategories.getAllModels();
-  const responseData = {
+  // Chỉ cần trả về biến 'modelsData' đã được xử lý lúc khởi động
+  return new Response(JSON.stringify({
     object: "list",
-    data: models.map(model => ({
-      id: model.id,
-      object: "model",
-      created: 1752371050, // Timestamp cố định
-      owned_by: model.owned_by
-    }))
-  };
-  return new Response(JSON.stringify(responseData), {
+    data: modelsData 
+  }), {
     headers: { "Content-Type": "application/json" }
   });
 }
 
-// 5. HANDLER CHO /v1/chat/completions
+// 6. HANDLER CHO /v1/chat/completions (Không đổi)
 async function handleChatRequest(req: Request) {
-  // Chọn ngẫu nhiên 1 JWT token
+  // ... (Toàn bộ logic chat của bạn giữ nguyên, vì nó đã hoạt động tốt)
+  
   if (jwtTokens.length === 0) {
     return new Response(JSON.stringify({ error: "Server-side configuration error: JWT_TOKEN not set." }), {
       status: 500, headers: { "Content-Type": "application/json" }
     });
   }
   const selectedToken = jwtTokens[Math.floor(Math.random() * jwtTokens.length)];
-  
   const requestData = await req.json();
   const { messages, model, stream = false } = requestData;
 
-  // Xác định driver
-  let driver = "openai-completion"; // Mặc định
+  let driver = "openai-completion";
   if (ModelCategories.deepseek.includes(model)) driver = "deepseek";
   else if (ModelCategories.xai.includes(model)) driver = "xai";
   else if (ModelCategories.claude.includes(model)) driver = "claude";
@@ -113,29 +152,19 @@ async function handleChatRequest(req: Request) {
 
   const requestPayload = {
     interface: "puter-chat-completion",
-    driver,
-    test_mode: false,
-    method: "complete",
+    driver, test_mode: false, method: "complete",
     args: { messages, model, stream }
   };
-
   const headers = {
-    "Host": "api.puter.com",
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:142.0) Gecko/20100101 Firefox/142.0",
-    "Accept": "*/*",
-    "Authorization": `Bearer ${selectedToken}`, // Dùng JWT token
-    "Content-Type": "application/json;charset=UTF-8",
-    "Origin": "https://docs.puter.com",
-    "Referer": "https://docs.puter.com/",
+    "Host": "api.puter.com", "User-Agent": "Mozilla/5.0", "Accept": "*/*",
+    "Authorization": `Bearer ${selectedToken}`, "Content-Type": "application/json;charset=UTF-8",
+    "Origin": "https://docs.puter.com", "Referer": "https://docs.puter.com/",
   };
 
   try {
     const response = await fetch("https://api.puter.com/drivers/call", {
-      method: "POST",
-      headers,
-      body: JSON.stringify(requestPayload)
+      method: "POST", headers, body: JSON.stringify(requestPayload)
     });
-
     if (!response.ok) {
       return new Response(JSON.stringify({ error: "Upstream API error", status: response.status }), {
         status: response.status, headers: { "Content-Type": "application/json" }
@@ -143,23 +172,18 @@ async function handleChatRequest(req: Request) {
     }
 
     if (stream) {
-      // Logic streaming y hệt file Deno (dùng TransformStream)
       const { readable, writable } = new TransformStream();
       const writer = writable.getWriter();
-      
       (async () => {
         const reader = response.body?.getReader();
         if (!reader) return;
         const encoder = new TextEncoder();
         const decoder = new TextDecoder();
-
-        // Gửi thông tin role
         const initialEvent = {
           id: `chatcmpl-${Date.now()}`, object: "chat.completion.chunk", created: Math.floor(Date.now() / 1000), model,
           choices: [{ index: 0, delta: { role: "assistant" }, finish_reason: null }]
         };
         await writer.write(encoder.encode(`data: ${JSON.stringify(initialEvent)}\n\n`));
-
         try {
           let buffer = "";
           while (true) {
@@ -167,13 +191,10 @@ async function handleChatRequest(req: Request) {
             if (done) break;
             const chunk = decoder.decode(value);
             buffer += chunk;
-            
             const lines = buffer.split("\n");
-            buffer = lines.pop() || ""; // Giữ lại dòng chưa hoàn chỉnh
-            
+            buffer = lines.pop() || ""; 
             for (const line of lines) {
               if (!line.trim()) continue;
-              
               try {
                 const jsonData = JSON.parse(line);
                 let text = "";
@@ -187,7 +208,6 @@ async function handleChatRequest(req: Request) {
                     text = content;
                   }
                 }
-                
                 if (text) {
                   const chunkEvent = {
                     id: `chatcmpl-${Date.now()}`, object: "chat.completion.chunk", created: Math.floor(Date.now() / 1000), model,
@@ -200,8 +220,6 @@ async function handleChatRequest(req: Request) {
               }
             }
           }
-          
-          // Gửi sự kiện [DONE]
           const doneEvent = {
             id: `chatcmpl-${Date.now()}`, object: "chat.completion.chunk", created: Math.floor(Date.now() / 1000), model,
             choices: [{ index: 0, delta: {}, finish_reason: "stop" }]
@@ -212,22 +230,17 @@ async function handleChatRequest(req: Request) {
           await writer.close();
         }
       })();
-
       return new Response(readable, {
         headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive" }
       });
     } else {
-      // Logic non-streaming
       const data = await response.json();
       let content = data?.result?.message?.content || "No text, maybe error?";
-      
       if (driver === "claude" && Array.isArray(content)) {
         content = content[0].text;
       }
-
       const usage = data?.result?.usage;
       let tokenUsage = [0, 0, 0];
-      
       if (Array.isArray(usage)) {
         tokenUsage = [
           ...usage.map((x: any) => x.amount),
@@ -240,12 +253,8 @@ async function handleChatRequest(req: Request) {
           (usage.input_tokens || 0) + (usage.output_tokens || 0)
         ];
       }
-
       return new Response(JSON.stringify({
-        choices: [{
-          message: { role: "assistant", content },
-          finish_reason: "stop"
-        }],
+        choices: [{ message: { role: "assistant", content }, finish_reason: "stop" }],
         usage: {
           prompt_tokens: tokenUsage[0],
           completion_tokens: tokenUsage[1],
@@ -262,20 +271,17 @@ async function handleChatRequest(req: Request) {
   }
 }
 
-// 6. ROUTER CHÍNH
+// 7. ROUTER CHÍNH
 async function handler(req: Request) {
   const url = new URL(req.url);
   
-  // Health check (bỏ qua auth)
   if (url.pathname === '/' && req.method === "GET") {
     return new Response("Puter.js (Raw API) Proxy is running!", { status: 200 });
   }
 
-  // Xác thực
   const authResponse = authMiddleware(req);
   if (authResponse) return authResponse;
 
-  // Routing
   if (url.pathname === "/v1/models" && req.method === "GET") {
     return handleModelsRequest();
   } else if (url.pathname === "/v1/chat/completions" && req.method === "POST") {
@@ -287,9 +293,14 @@ async function handler(req: Request) {
   }
 }
 
-// 7. KHỞI ĐỘNG SERVER BUN
+// 8. KHỞI ĐỘNG SERVER BUN (SỬA LẠI)
 const port = parseInt(process.env.PORT || '8000');
-console.log(`✅ Server Bun (Raw Puter Proxy) đang chạy tại: http://localhost:${port}`);
+console.log("Đang khởi động server...");
+
+// GỌI HÀM TẢI MODELS (ĐỘNG HOẶC TĨNH)
+await loadModelsRobust();
+
+console.log(`✅ Server Bun (Raw Puter Proxy - Hybrid Models) đang chạy tại: http://localhost:${port}`);
 console.log(`🔒 Đã tải ${authTokens.length} API key (AUTH_TOKEN).`);
 console.log(`🔑 Đã tải ${jwtTokens.length} Puter JWT (JWT_TOKEN).`);
 
