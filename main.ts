@@ -1,99 +1,98 @@
 // main.ts
 //
 // Cách chạy:
-// 1. Tạo file .env (xem ví dụ)
-// 2. Đặt file 'models.txt' cùng thư mục.
-// 3. Chạy:
+// 1. Tạo file .env
+// 2. Chạy:
 //    deno run --allow-net --allow-env --allow-read main.ts
+//    (Vẫn cần --allow-read để đọc file .env)
 
 import { Hono } from 'npm:hono@latest';
 import { streamSSE } from 'npm:hono/streaming';
 import { init } from 'npm:@heyputer/puter.js/src/init.cjs';
-
-// 1. IMPORT THƯ VIỆN .ENV CHUẨN CỦA DENO
 import { load } from 'https://deno.land/std@0.224.0/dotenv/mod.ts';
 
-// 2. TẢI CÁC BIẾN TỪ FILE .env VÀO Deno.env
-// Phải chạy trước khi truy cập Deno.env
+// 1. TẢI .ENV (Không đổi)
 await load();
 
-// 3. LẤY AUTH TOKENS (TỪ .ENV)
+// 2. LẤY AUTH TOKENS (Không đổi)
 const PUTER_AUTH_TOKEN = Deno.env.get('PUTER_AUTH_TOKEN');
-const SERVER_API_KEY = Deno.env.get('SERVER_API_KEY'); // Key mới
+const SERVER_API_KEY = Deno.env.get('SERVER_API_KEY');
 
-// 4. KIỂM TRA CÁC BIẾN MÔI TRƯỜNG (Rất quan trọng)
-if (!PUTER_AUTH_TOKEN) {
-  console.error("Lỗi: PUTER_AUTH_TOKEN chưa được set trong file .env");
-  Deno.exit(1);
-}
-if (!SERVER_API_KEY) {
-  console.error("Lỗi: SERVER_API_KEY chưa được set trong file .env");
-  console.error("Hãy tạo một key ngẫu nhiên (ví dụ: 'sk-12345') và thêm vào .env");
+if (!PUTER_AUTH_TOKEN || !SERVER_API_KEY) {
+  console.error("Lỗi: PUTER_AUTH_TOKEN hoặc SERVER_API_KEY chưa được set trong file .env");
   Deno.exit(1);
 }
 
-// 5. KHỞI TẠO PUTER SDK
+// 3. KHỞI TẠO PUTER SDK (Không đổi)
 const puter = init(PUTER_AUTH_TOKEN);
 
-// 6. ĐỌC DATA CHO ENDPOINT /v1/models (Không đổi)
+// ===============================================
+// 4. (CẬP NHẬT) TẢI MODELS VÀO BỘ NHỚ KHI KHỞI ĐỘNG
+// ===============================================
 let modelsData: any[] = [];
-try {
-  const modelsJson = await Deno.readTextFile('./models.txt');
-  const modelsList = JSON.parse(modelsJson).models;
-  modelsData = modelsList.map((modelId: string) => ({
-    id: modelId,
-    object: "model",
-    created: Math.floor(Date.now() / 1000),
-    owned_by: "puter",
-  }));
-} catch (err) {
-  console.warn("⚠️ Cảnh báo: Không thể đọc file 'models.txt'. Endpoint /v1/models sẽ rỗng.");
+const MODELS_URL = "https://puter.com/puterai/chat/models";
+
+/**
+ * Hàm này tự động chạy khi server khởi động,
+ * tải models từ URL và lưu vào biến 'modelsData'.
+ */
+async function loadModelsIntoMemory() {
+  console.log(`Đang tải models từ: ${MODELS_URL}...`);
+  try {
+    const response = await fetch(MODELS_URL);
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    
+    // File models.txt chứa {"models": ["...", "..."]}
+    const modelsJson = await response.json();
+    const modelsList = modelsJson.models; 
+
+    // Chuyển đổi list string thành định dạng object của OpenAI
+    modelsData = modelsList.map((modelId: string) => ({
+      id: modelId,
+      object: "model",
+      created: Math.floor(Date.now() / 1000), // Dùng timestamp hiện tại
+      owned_by: "puter", // Giả định
+    }));
+    
+    console.log(`✅ Đã tải ${modelsData.length} models vào bộ nhớ.`);
+    
+  } catch (err) {
+    console.error("⚠️ Lỗi nghiêm trọng: Không thể tải danh sách models.", err.message);
+    console.error("Endpoint /v1/models sẽ trả về danh sách rỗng.");
+    // Bạn có thể chọn Deno.exit(1) ở đây nếu muốn server dừng
+  }
 }
 
-// 7. TẠO HONO SERVER
+// 5. TẠO HONO SERVER
 const app = new Hono();
 
-// ===============================================
-// 8. MIDDLEWARE XÁC THỰC API KEY (Nâng cấp cốt lõi)
-// ===============================================
-// Middleware này sẽ chạy cho MỌI route bắt đầu bằng /v1/*
+// 6. MIDDLEWARE XÁC THỰC (Không đổi)
 app.use('/v1/*', async (c, next) => {
   const authHeader = c.req.header('Authorization');
   const expectedToken = `Bearer ${SERVER_API_KEY}`;
-
   if (!authHeader || authHeader !== expectedToken) {
     console.warn("Xác thực thất bại. API key không hợp lệ.");
-    // Trả về lỗi 401 Unauthorized theo chuẩn OpenAI
     return c.json({
-      error: {
-        message: "Incorrect API key provided. You must be authenticated to use this API.",
-        type: "invalid_request_error",
-        code: "invalid_api_key"
-      }
+      error: { message: "Incorrect API key provided.", type: "invalid_request_error", code: "invalid_api_key" }
     }, 401);
   }
-
-  // Key hợp lệ, tiếp tục xử lý request
   await next();
 });
 
-// ===============================================
-// ENDPOINT: GET /v1/models
-// (Giờ đã được bảo vệ bởi middleware)
-// ===============================================
+// 7. ENDPOINT /v1/models (Không đổi, chỉ đọc từ 'modelsData')
 app.get('/v1/models', (c) => {
   console.log("GET /v1/models (Đã xác thực)");
   return c.json({
     object: "list",
-    data: modelsData,
+    data: modelsData, // 'modelsData' giờ được điền từ network
   });
 });
 
-// ===============================================
-// ENDPOINT: POST /v1/chat/completions
-// (Giờ đã được bảo vệ bởi middleware)
-// ===============================================
+// 8. ENDPOINT /v1/chat/completions (Không đổi)
 app.post('/v1/chat/completions', async (c) => {
+  // (Toàn bộ logic xử lý chat giữ nguyên y hệt)
   console.log("POST /v1/chat/completions (Đã xác thực)");
   const body = await c.req.json();
   const isStream = body.stream ?? false;
@@ -178,15 +177,18 @@ app.post('/v1/chat/completions', async (c) => {
   }
 });
 
-// Endpoint Health Check (Không cần auth vì không nằm trong /v1/*)
+// 9. HEALTH CHECK (Không đổi)
 app.get('/', (c) => {
-  return c.text('Puter.js (Deno) OpenAI-compatible Proxy (v3 - Secure) is running!');
+  return c.text('Puter.js (Deno) OpenAI-compatible Proxy (v4 - In-Memory) is running!');
 });
 
-// 9. KHỞI ĐỘNG SERVER
+// 10. KHỞI ĐỘNG SERVER
 console.log("✅ Đã tải cấu hình từ .env");
-console.log(`✅ Đã tải ${modelsData.length} models từ models.txt.`);
-console.log("✅ Server Deno (Proxy Puter.js v3) đang chạy tại: http://localhost:8000");
+
+// Chạy hàm tải models TRƯỚC khi khởi động server
+await loadModelsIntoMemory(); 
+
+console.log("✅ Server Deno (Proxy Puter.js v4) đang chạy tại: http://localhost:8000");
 console.log("🔒 Các endpoint /v1/* đã được bảo vệ bằng SERVER_API_KEY.");
 
 Deno.serve({
