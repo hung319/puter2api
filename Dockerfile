@@ -1,33 +1,32 @@
 # =================================================================
-# STAGE 1: Dependency Caching (builder)
+# STAGE 1: Cài đặt Dependencies
 # =================================================================
-FROM denoland/deno:alpine AS builder
-WORKDIR /app
-COPY main.ts .
-RUN deno cache --no-check main.ts
-
-# =================================================================
-# STAGE 2: Final Runtime Image
-# =================================================================
-FROM denoland/deno:alpine
+FROM oven/bun:1.0 as deps
 WORKDIR /app
 
-# ⛔️ KHÔNG CẦN DÒNG NÀY NỮA:
-# RUN adduser -D deno
-# User 'deno' đã tồn tại sẵn trong base image 'denoland/deno:alpine'.
+# Copy chỉ package.json và lockfile để cache dependencies
+COPY package.json bun.lockb* ./
+RUN bun install --frozen-lockfile
 
-# ✅ CHÚNG TA CHỈ CẦN CHUYỂN SANG USER ĐÓ:
-USER deno
+# =================================================================
+# STAGE 2: Chạy Production
+# =================================================================
+FROM oven/bun:1.0
 
-# Copy dependencies đã cache từ stage 'builder'
-COPY --from=builder /deno-dir /deno-dir
+WORKDIR /app
 
-# Copy code ứng dụng
-COPY main.ts .
-# (Đã xóa COPY models.txt . vì không cần nữa)
+# Copy dependencies đã cài đặt từ stage 1
+COPY --from=deps /app/node_modules ./node_modules
 
-# --- Runtime ---
+# Copy code của ứng dụng
+# (Chúng ta không cần build, Bun chạy TS trực tiếp)
+COPY src ./src
+COPY package.json .
+
+# (Không cần copy tsconfig.json vì không build)
+
 EXPOSE 8000
 
-# Lệnh chạy (vẫn cần --allow-read để đọc .env)
-CMD ["run", "--allow-net", "--allow-env", "--allow-read", "main.ts"]
+# Chạy ứng dụng bằng Bun
+# Bun sẽ tự động đọc .env
+CMD ["bun", "src/index.ts"]
