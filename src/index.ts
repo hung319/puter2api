@@ -2,9 +2,7 @@
 
 // 1. LẤY CẤU HÌNH TỪ .ENV
 const jwtTokens = (process.env.JWT_TOKEN || "").split(",").filter(Boolean);
-const authTokens = (process.env.AUTH_TOKEN || "30041975").split(",").filter(Boolean);
-
-// 💡 THÊM MỚI: Đọc Proxy
+const authTokens = (process.env.AUTH_TOKEN || "11042006").split(",").filter(Boolean);
 const proxyUrl = process.env.PROXY_URL || undefined;
 
 if (jwtTokens.length === 0) {
@@ -14,13 +12,11 @@ if (authTokens.length === 0) {
   console.error("Lỗi: Biến môi trường 'AUTH_TOKEN' chưa được set.");
 }
 if (proxyUrl) {
-  console.log(`✅ Đã phát hiện Proxy: ${proxyUrl.split('@')[0]}...`); // Ẩn user:pass
+  console.log(`✅ Đã phát hiện Proxy: ${proxyUrl.split('@')[0]}...`);
 }
 
-
-// 2. PHÂN LOẠI MODELS TĨNH (Không đổi)
+// 2. PHÂN LOẠI MODELS TĨNH (SỬA LỖI 2)
 class ModelCategories {
-  // ... (Tất cả logic models giữ nguyên)
   static deepseek = [
     "deepseek-chat", "deepseek-reasoner", "deepseek-v3", "deepseek-r1-0528"
   ];
@@ -39,7 +35,10 @@ class ModelCategories {
     "mistral-large-latest", "codestral-latest"
   ];
 
-  static getAllModels() {
+  // ==============================================================
+  // 💡 SỬA LỖI 2: Thêm lại hàm static đã bị thiếu
+  // ==============================================================
+  static getAllModelsStatic() {
     return [
       ...ModelCategories.deepseek.map(id => ({ id, owned_by: "deepseek" })),
       ...ModelCategories.xai.map(id => ({ id, owned_by: "xai" })),
@@ -50,24 +49,31 @@ class ModelCategories {
   }
 }
 
-// 3. LOGIC TẢI MODELS (Hybrid) (Không đổi)
+// 3. LOGIC TẢI MODELS (SỬA LỖI 1)
 let modelsData: any[] = [];
 const MODELS_URL = "https://puter.com/puterai/chat/models";
 
 async function loadModelsRobust() {
   try {
     console.log(`Đang thử tải models động từ: ${MODELS_URL}...`);
-    
-    // 💡 THÊM MỚI: Dùng proxy (nếu có) để tải models
     const response = await fetch(MODELS_URL, {
       ...(proxyUrl && { proxy: proxyUrl })
     });
 
-    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    
     const modelsJson = await response.json(); 
-    const modelsList = modelsJson.models;
+    
+    // ==============================================================
+    // 💡 SỬA LỖI 1: Thêm '?' để kiểm tra 'null'
+    // ==============================================================
+    const modelsList = modelsJson?.models;
+
     if (!modelsList || !Array.isArray(modelsList) || modelsList.length === 0) {
-      throw new Error("Tải động thành công nhưng nội dung rỗng.");
+      // Lỗi này sẽ bắt được cả 'null' và '[]'
+      throw new Error("Tải động thành công nhưng nội dung rỗng hoặc không hợp lệ."); 
     }
 
     modelsData = modelsList.map((modelId: string) => {
@@ -86,16 +92,21 @@ async function loadModelsRobust() {
       };
     });
     console.log(`✅ Đã tải động ${modelsData.length} models vào bộ nhớ.`);
+
   } catch (err) {
     console.warn("⚠️ Tải models động thất bại.", (err as Error).message);
     console.warn("Đang sử dụng danh sách models tĩnh (hard-coded) làm dự phòng.");
+    
+    // Dòng này giờ sẽ hoạt động
     const staticModels = ModelCategories.getAllModelsStatic(); 
+    
     modelsData = staticModels.map(model => ({
       id: model.id,
       object: "model",
-      created: 1752371050,
+      created: 1752371050, 
       owned_by: model.owned_by
     }));
+    
     console.log(`✅ Đã tải ${modelsData.length} models tĩnh (dự phòng).`);
   }
 }
@@ -103,7 +114,6 @@ async function loadModelsRobust() {
 
 // 4. MIDDLEWARE XÁC THỰC (Không đổi)
 function authMiddleware(req: Request) {
-  // ... (Logic y hệt)
   const authHeader = req.headers.get("Authorization");
   if (!authHeader) {
     return new Response(JSON.stringify({ error: "Authorization header missing" }), {
@@ -121,7 +131,6 @@ function authMiddleware(req: Request) {
 
 // 5. HANDLER CHO /v1/models (Không đổi)
 function handleModelsRequest() {
-  // ... (Logic y hệt)
   return new Response(JSON.stringify({
     object: "list",
     data: modelsData 
@@ -130,9 +139,8 @@ function handleModelsRequest() {
   });
 }
 
-// 6. HANDLER CHO /v1/chat/completions (Cập nhật fetch)
+// 6. HANDLER CHO /v1/chat/completions (Không đổi)
 async function handleChatRequest(req: Request) {
-  // ... (Logic chọn token, driver... y hệt)
   if (jwtTokens.length === 0) {
     return new Response(JSON.stringify({ error: "Server-side configuration error: JWT_TOKEN not set." }), {
       status: 500, headers: { "Content-Type": "application/json" }
@@ -160,23 +168,19 @@ async function handleChatRequest(req: Request) {
   };
 
   try {
-    // 💡 THAY ĐỔI Ở ĐÂY: Thêm 'proxy' vào fetch
     const response = await fetch("https://api.puter.com/drivers/call", {
       method: "POST",
       headers,
       body: JSON.stringify(requestPayload),
-      // Tự động thêm 'proxy: proxyUrl' nếu proxyUrl tồn tại
       ...(proxyUrl && { proxy: proxyUrl }) 
     });
 
     if (!response.ok) {
-      // ... (Logic xử lý lỗi y hệt)
       return new Response(JSON.stringify({ error: "Upstream API error", status: response.status }), {
         status: response.status, headers: { "Content-Type": "application/json" }
       });
     }
 
-    // ... (Toàn bộ logic streaming và non-streaming còn lại y hệt)
     if (stream) {
       const { readable, writable } = new TransformStream();
       const writer = writable.getWriter();
@@ -186,7 +190,7 @@ async function handleChatRequest(req: Request) {
         const encoder = new TextEncoder();
         const decoder = new TextDecoder();
         const initialEvent = {
-          id: `chatcmpl-${Date.now()}`, object: "chat.completion.chunk", created: Math.floor(Date.now() / 1000), model,
+          id: `chatcmpl-${Date.mow()}`, object: "chat.completion.chunk", created: Math.floor(Date.now() / 1000), model,
           choices: [{ index: 0, delta: { role: "assistant" }, finish_reason: null }]
         };
         await writer.write(encoder.encode(`data: ${JSON.stringify(initialEvent)}\n\n`));
@@ -279,7 +283,6 @@ async function handleChatRequest(req: Request) {
 
 // 7. ROUTER CHÍNH (Không đổi)
 async function handler(req: Request) {
-  // ... (Logic y hệt)
   const url = new URL(req.url);
   if (url.pathname === '/' && req.method === "GET") {
     return new Response("Puter.js (Raw API) Proxy is running!", { status: 200 });
@@ -301,7 +304,7 @@ async function handler(req: Request) {
 const port = parseInt(process.env.PORT || '8000');
 console.log("Đang khởi động server...");
 await loadModelsRobust();
-console.log(`✅ Server Bun (Raw Puter Proxy - Hybrid Models - Proxy Enabled) đang chạy tại: http://localhost:${port}`);
+console.log(`✅ Server Bun (Raw Puter Proxy - Hybrid Models v2) đang chạy tại: http://localhost:${port}`);
 console.log(`🔒 Đã tải ${authTokens.length} API key (AUTH_TOKEN).`);
 console.log(`🔑 Đã tải ${jwtTokens.length} Puter JWT (JWT_TOKEN).`);
 if (proxyUrl) {
