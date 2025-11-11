@@ -1,0 +1,17 @@
+{
+  "name": "puter2api-bun",
+  "version": "1.0.0",
+  "description": "OpenAI proxy for Puter.js on Bun",
+  "type": "module",
+  "scripts": {
+    "dev": "bun --watch src/index.ts",
+    "start": "bun src/index.ts"
+  },
+  "dependencies": {
+    "@heyputer/puter.js": "^2.1.4",
+    "hono": "^4.5.1"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  }
+}
