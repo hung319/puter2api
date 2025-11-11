@@ -12,18 +12,22 @@ RUN deno cache --no-check main.ts
 FROM denoland/deno:alpine
 WORKDIR /app
 
-RUN adduser -D deno
+# ⛔️ KHÔNG CẦN DÒNG NÀY NỮA:
+# RUN adduser -D deno
+# User 'deno' đã tồn tại sẵn trong base image 'denoland/deno:alpine'.
+
+# ✅ CHÚNG TA CHỈ CẦN CHUYỂN SANG USER ĐÓ:
 USER deno
 
+# Copy dependencies đã cache từ stage 'builder'
 COPY --from=builder /deno-dir /deno-dir
 
-# --- Application Code ---
+# Copy code ứng dụng
 COPY main.ts .
-# ⛔️ ĐÃ XÓA DÒNG NÀY:
-# COPY models.txt .
+# (Đã xóa COPY models.txt . vì không cần nữa)
 
 # --- Runtime ---
 EXPOSE 8000
 
-# (Không đổi) Vẫn cần --allow-read để đọc .env
+# Lệnh chạy (vẫn cần --allow-read để đọc .env)
 CMD ["run", "--allow-net", "--allow-env", "--allow-read", "main.ts"]
