@@ -6,7 +6,7 @@ WORKDIR /app
 
 # Copy chỉ package.json và lockfile để cache dependencies
 COPY package.json bun.lockb* ./
-RUN bun install --frozen-lockfile
+RUN bun install
 
 # =================================================================
 # STAGE 2: Chạy Production
