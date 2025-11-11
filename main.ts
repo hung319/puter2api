@@ -8,7 +8,7 @@
 
 import { Hono } from 'npm:hono@latest';
 import { streamSSE } from 'npm:hono/streaming';
-import { init } from 'npm:@heyputer/puter.js/src/init.cjs';
+import { puter } from 'npm:@heyputer/puter.js';
 import { load } from 'https://deno.land/std@0.224.0/dotenv/mod.ts';
 
 // 1. TẢI .ENV (Không đổi)
