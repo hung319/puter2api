@@ -3,7 +3,7 @@
 // 1. LẤY CẤU HÌNH TỪ .ENV
 // Đã xóa 'proxyUrl'. Bun sẽ tự động đọc HTTP_PROXY/HTTPS_PROXY.
 const jwtTokens = (process.env.JWT_TOKEN || "").split(",").filter(Boolean);
-const authTokens = (process.env.AUTH_TOKEN || "11042006").split(",").filter(Boolean);
+const authTokens = (process.env.AUTH_TOKEN || "").split(",").filter(Boolean);
 
 if (jwtTokens.length === 0) {
   console.error("Lỗi: Biến môi trường 'JWT_TOKEN' chưa được set.");
