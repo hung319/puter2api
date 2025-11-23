@@ -7,8 +7,14 @@ const authTokens = (process.env.AUTH_TOKEN || "").split(",").filter(Boolean);
 if (jwtTokens.length === 0) console.error("Lỗi: Biến môi trường 'JWT_TOKEN' chưa được set.");
 if (authTokens.length === 0) console.error("Lỗi: Biến môi trường 'AUTH_TOKEN' chưa được set.");
 
+// [NEW] Cấu hình CORS
+const CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With",
+};
+
 // 2. LOGIC TẢI MODELS (Dynamic Only)
-// Đã xóa ModelCategories và logic fallback tĩnh.
 let modelsData: any[] = [];
 const MODELS_URL = "https://puter.com/puterai/chat/models";
 
@@ -27,7 +33,6 @@ async function loadModelsRobust() {
     }
 
     modelsData = modelsList.map((modelId: string) => {
-      // Logic xác định owner dựa trên tên model (Heuristic)
       let owned_by = "unknown";
       if (modelId.includes("deepseek")) owned_by = "deepseek";
       else if (modelId.includes("grok")) owned_by = "xai";
@@ -47,17 +52,14 @@ async function loadModelsRobust() {
   } catch (err) {
     console.error("⚠️ Tải models thất bại:", (err as Error).message);
     console.warn("Server sẽ chạy với danh sách model rỗng cho đến lần fetch tiếp theo.");
-    // Không còn fallback tĩnh. Giữ nguyên modelsData cũ nếu có (trong trường hợp reload), hoặc rỗng.
   }
 }
 
-// Helper function để xác định driver dựa trên tên model
 function determineDriver(model: string): string {
   if (model.includes("deepseek")) return "deepseek";
   if (model.includes("grok")) return "xai";
   if (model.includes("claude")) return "claude";
   if (model.includes("mistral") || model.includes("codestral")) return "mistral";
-  // Mặc định cho OpenAI (gpt-*, o1-*, etc.)
   return "openai-completion";
 }
 
@@ -88,7 +90,6 @@ function handleModelsRequest() {
   });
 }
 
-// Handler cho /health (Không cần auth)
 function handleHealthRequest() {
   return new Response(JSON.stringify({
     status: "ok",
@@ -116,8 +117,6 @@ async function handleChatRequest(req: Request) {
   }
   
   const { messages, model, stream = false } = requestData;
-
-  // Sử dụng helper function thay vì tra cứu mảng tĩnh
   const driver = determineDriver(model);
 
   const requestPayload = {
@@ -154,7 +153,6 @@ async function handleChatRequest(req: Request) {
         const encoder = new TextEncoder();
         const decoder = new TextDecoder();
         
-        // Gửi sự kiện mở đầu
         const initialEvent = {
           id: `chatcmpl-${Date.now()}`, object: "chat.completion.chunk", created: Math.floor(Date.now() / 1000), model,
           choices: [{ index: 0, delta: { role: "assistant" }, finish_reason: null }]
@@ -176,7 +174,6 @@ async function handleChatRequest(req: Request) {
               try {
                 const jsonData = JSON.parse(line);
                 let text = "";
-                // Parsing logic của Puter
                 if (jsonData.text) {
                   text = jsonData.text;
                 } else if (jsonData.result?.message?.content) {
@@ -187,7 +184,6 @@ async function handleChatRequest(req: Request) {
                     text = content;
                   }
                 }
-
                 if (text) {
                   const chunkEvent = {
                     id: `chatcmpl-${Date.now()}`, object: "chat.completion.chunk", created: Math.floor(Date.now() / 1000), model,
@@ -195,9 +191,7 @@ async function handleChatRequest(req: Request) {
                   };
                   await writer.write(encoder.encode(`data: ${JSON.stringify(chunkEvent)}\n\n`));
                 }
-              } catch (e) {
-                // Bỏ qua lỗi parse JSON dòng lẻ
-              }
+              } catch (e) {}
             }
           }
           const doneEvent = {
@@ -216,32 +210,21 @@ async function handleChatRequest(req: Request) {
       });
 
     } else {
-      // Non-streaming logic
       const data = await response.json();
       let content = data?.result?.message?.content || "";
-      
       if (Array.isArray(content)) {
-        // Xử lý trường hợp Claude trả về mảng content blocks
         content = content.find((c: any) => c.type === 'text')?.text || JSON.stringify(content);
       } else if (typeof content !== 'string') {
          content = JSON.stringify(content);
       }
-
       const usage = data?.result?.usage || {};
       const prompt_tokens = usage.input_tokens || 0;
       const completion_tokens = usage.output_tokens || 0;
 
       return new Response(JSON.stringify({
-        id: `chatcmpl-${Date.now()}`,
-        object: "chat.completion",
-        created: Math.floor(Date.now() / 1000),
-        model: model,
+        id: `chatcmpl-${Date.now()}`, object: "chat.completion", created: Math.floor(Date.now() / 1000), model,
         choices: [{ message: { role: "assistant", content }, finish_reason: "stop", index: 0 }],
-        usage: {
-          prompt_tokens,
-          completion_tokens,
-          total_tokens: prompt_tokens + completion_tokens
-        }
+        usage: { prompt_tokens, completion_tokens, total_tokens: prompt_tokens + completion_tokens }
       }), {
         headers: { "Content-Type": "application/json" }
       });
@@ -253,40 +236,56 @@ async function handleChatRequest(req: Request) {
   }
 }
 
-// 5. ROUTER CHÍNH
+// 5. ROUTER CHÍNH & START SERVER
 async function handler(req: Request) {
   const url = new URL(req.url);
 
-  // Public Health Check (Bypass Auth)
-  if (req.method === "GET" && (url.pathname === "/health" || url.pathname === "/v1/health")) {
-    return handleHealthRequest();
-  }
-  
-  if (url.pathname === '/' && req.method === "GET") {
-    return new Response("Puter.js (Raw API) Proxy is running! Check /health for status.", { status: 200 });
+  // === CORS PREFLIGHT ===
+  if (req.method === "OPTIONS") {
+    return new Response(null, { status: 204, headers: CORS_HEADERS });
   }
 
-  // Authentication Check
-  const authResponse = authMiddleware(req);
-  if (authResponse) return authResponse;
+  let response: Response;
 
-  // Protected Routes
-  if (url.pathname === "/v1/models" && req.method === "GET") {
-    return handleModelsRequest();
-  } else if (url.pathname === "/v1/chat/completions" && req.method === "POST") {
-    return handleChatRequest(req);
-  } else {
-    return new Response(JSON.stringify({ error: "Not found" }), {
-      status: 404, headers: { "Content-Type": "application/json" }
+  // === ROUTING LOGIC ===
+  try {
+    if (req.method === "GET" && (url.pathname === "/health" || url.pathname === "/v1/health")) {
+      response = handleHealthRequest();
+    } else if (url.pathname === '/' && req.method === "GET") {
+      response = new Response("Puter.js (Raw API) Proxy is running! Check /health for status.", { status: 200 });
+    } else {
+      const authError = authMiddleware(req);
+      if (authError) {
+        response = authError;
+      } else if (url.pathname === "/v1/models" && req.method === "GET") {
+        response = handleModelsRequest();
+      } else if (url.pathname === "/v1/chat/completions" && req.method === "POST") {
+        response = await handleChatRequest(req);
+      } else {
+        response = new Response(JSON.stringify({ error: "Not found" }), {
+          status: 404, headers: { "Content-Type": "application/json" }
+        });
+      }
+    }
+  } catch (err) {
+    response = new Response(JSON.stringify({ error: "Unhandled Server Error", details: (err as Error).message }), {
+      status: 500, headers: { "Content-Type": "application/json" }
     });
   }
+
+  // === INJECT CORS HEADERS ===
+  // Gắn header vào mọi response trả về
+  for (const [key, value] of Object.entries(CORS_HEADERS)) {
+    response.headers.set(key, value);
+  }
+
+  return response;
 }
 
-// 6. KHỞI ĐỘNG SERVER BUN
 const port = parseInt(process.env.PORT || '8000');
 console.log("Đang khởi động server...");
 await loadModelsRobust();
-console.log(`✅ Server Bun (Raw Puter Proxy - Dynamic v2) đang chạy tại: http://localhost:${port}`);
+console.log(`✅ Server Bun (Raw Puter Proxy - Dynamic v2 + CORS) đang chạy tại: http://localhost:${port}`);
 console.log(`🩺 Health check available at: http://localhost:${port}/health`);
 
 export default {
